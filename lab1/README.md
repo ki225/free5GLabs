@@ -95,6 +95,29 @@ func main() {
 
 The example above demonstrates how to use atomic operations in Go. The `AddInt32` function is an atomic operation that increments the value of the counter by 1.
 
+An atomic operation means the operation is completed as one indivisible step. Other goroutines cannot observe or interrupt the operation halfway through.
+
+For example, this statement looks like one operation:
+```go
+counter++
+```
+
+However, it is usually closer to these steps:
+```text
+read counter
+add 1
+write counter back
+```
+
+If two goroutines execute these steps at the same time, they may both read the same old value and write back the same new value. This means one increment is lost.
+
+Atomic operations prevent this kind of lost update for small shared-memory operations:
+```go
+atomic.AddInt64(&counter, 1)
+```
+
+Atomic operations are useful for simple operations such as increment, load, store, swap, and compare-and-swap. For larger critical sections, use synchronization primitives such as `sync.Mutex`.
+
 ## SpinLock
 
 Spinlock is a synchronization primitive that is used to protect shared resources from concurrent access. A spinlock is used to ensure that only one goroutine can access the shared resource at a time.
@@ -130,6 +153,17 @@ In Go, a mutex is a synchronization primitive that is used to protect shared res
 
 The difference between a mutex and a spinlock is that a mutex will put the goroutine to sleep if the resource is already locked, while a spinlock will keep the goroutine busy until the resource is available.
 
+In other words, both spinlock and mutex are locks. The main difference is how they wait when the lock is already held:
+
+```text
+Spinlock: keep checking until the lock is available
+Mutex:    block or sleep until the lock is available
+```
+
+A spinlock may be useful only when the critical section is extremely short and the expected waiting time is very small. If the wait is long, a spinlock wastes CPU because it keeps running while waiting.
+
+A mutex is the better default choice in Go. It lets the runtime block the waiting goroutine and schedule other useful work.
+
 ```go
 package main
 
@@ -153,6 +187,46 @@ func main() {
 Any other goroutine that tries to access the shared resource while the mutex is locked will be blocked until the mutex is unlocked.
 
 - [Source Code of Mutex in Go](https://go.dev/src/sync/mutex.go)
+
+## Semaphore
+
+A semaphore is also a synchronization primitive, but it is used to control how many goroutines can access a resource at the same time.
+
+The difference is:
+
+```text
+Mutex / Spinlock: allow 1 goroutine at a time
+Semaphore:        allow N goroutines at a time
+```
+
+For example, a semaphore can limit:
+
+- At most 5 goroutines sending API requests at the same time
+- At most 10 workers processing jobs at the same time
+- At most 3 connections using an expensive resource at the same time
+
+In Go, a buffered channel can be used as a simple semaphore:
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    sem := make(chan struct{}, 3) // allow at most 3 goroutines at once
+
+    for i := 0; i < 10; i++ {
+        go func(id int) {
+            sem <- struct{}{}        // acquire one slot
+            defer func() { <-sem }() // release one slot
+
+            fmt.Println("worker", id)
+        }(i)
+    }
+}
+```
+
+A binary semaphore, whose capacity is 1, can look similar to a mutex. However, their meanings are different. A mutex usually protects ownership of shared data. A semaphore usually represents a limited number of available resource slots.
 
 ## Channel
 Goroutines run in the same address space, so access to shared memory must be synchronized. In Golang, Channel is a powerful concurrency primitive function used for passing data between different goroutines. It provides an effective communication mechanism that allows goroutines to safely exchange information without requiring additional synchronization mechanisms.
@@ -263,6 +337,9 @@ func main() {
     ch := make(chan int, 1)
 
     select {
+    // case <-x means 從 channel x 接收一個值，但不把值存起來
+    // 等價於 case _ = <-x 
+    // 也就是只在乎 x 有沒有收到訊號，不在乎收到的值是什麼
     case <-ch:
         fmt.Println("random 01")
     case <-ch:
@@ -297,6 +374,27 @@ In the example above, Once the **`select`** operation exceeds 1 second, and then
 ## WaitGroup
 Previously, you have learned about concurrency for goroutines, but how can you control the concurrency? One of the ways is through **`WaitGroup`**. When you have a task that you want to split it into different jobs for execution, you need to make the main goroutine waiting for the other goroutines being completed before continuing execution.
 
+The reason we need a `WaitGroup` is that the main goroutine does not automatically wait for other goroutines.
+
+For example:
+```go
+func main() {
+    go func() {
+        fmt.Println("job done")
+    }()
+}
+```
+
+This program may exit before the goroutine prints anything. When `main` returns, the whole process ends, and the background goroutine is stopped with it.
+
+`sync.WaitGroup` solves this by keeping a counter of unfinished jobs:
+
+```text
+wg.Add(n):  add n jobs to wait for
+wg.Done():  mark one job as finished, same as wg.Add(-1)
+wg.Wait():  block until the counter becomes 0
+```
+
 Typically, you need to declare a WaitGroup with a **`pointer`**. There are 3 ways to declare it:
 ```go
 wg := &sync.WaitGroup{}
@@ -329,10 +427,40 @@ gofunc() {
 :star: **Notice**: Every time you call **`wg.Add(int)`**, you must ensure that the number of times you call **`wg.Add()`**, there should be a corresponding **`wg.Done()`** when the wait group completes. Otherwise: 
 * goroutines numbers > wg.Add numbers : some goroutines would not execute
 * goroutines numbers < wg.Add numbers : cause Deadlock
+
+Usually, call `wg.Add(1)` before starting the goroutine:
+
+```go
+for i := 0; i < 5; i++ {
+    wg.Add(1)
+
+    go func(id int) {
+        defer wg.Done()
+        fmt.Println("worker", id)
+    }(i)
+}
+
+wg.Wait()
+```
+
+Do not put `wg.Add(1)` inside the goroutine. If `main` reaches `wg.Wait()` before the goroutine calls `Add(1)`, the counter may still be 0, and `main` may continue too early.
     
 ## Context
 Context is another method to control concurrency. It can manage the termination of multiple goroutines and resources allocation. 
 In the **WaitGroup** chapter, we introduced spliting a task into multiple jobs to run in the background. If you want to proactively notify and stop running jobs, you can achieve this with **`channel+select `** statements. However, if the situation is more complex, such as having a large number of background goroutines or goroutines within goroutines, you will need a more powerful tool.
+
+`WaitGroup` and `Context` solve different problems:
+
+```text
+WaitGroup: wait for goroutines to finish
+Context:   tell goroutines to stop
+```
+
+The most common uses of context are:
+
+- Cancel a running operation
+- Set a timeout or deadline
+- Pass request-scoped values through a call chain
 
 ![queue_flow_worker_job](https://github.com/KunLee76/free5GCLab/blob/master/lab1/queue_flow_worker_job.png)
 > Source: [小惡魔.AppleBOY](https://blog.wu-boy.com/2020/05/understant-golang-context-in-10-minutes/)
@@ -366,6 +494,96 @@ func worker(ctx context.Context, name string) {
 }
 ```
 As above statement, you can stop multiple worker nodes with a single context simultaneously. You can also implement a graceful shutdown to cancel the running jobs through this approach.
+
+The important part is:
+
+```go
+case <-ctx.Done():
+```
+
+`ctx.Done()` returns a channel. When `cancel()` is called, that channel is closed. In Go, receiving from a closed channel returns immediately, so the `case <-ctx.Done()` branch becomes ready and the goroutine can return.
+
+Conceptually, `context.WithCancel` is similar to this pattern:
+
+```go
+done := make(chan struct{})
+
+go func() {
+    for {
+        select {
+        case <-done:
+            fmt.Println("stop")
+            return
+        default:
+            fmt.Println("working")
+        }
+    }
+}()
+
+close(done) // similar to calling cancel()
+```
+
+Calling `cancel()` does not forcibly kill a goroutine. It only sends a cancellation signal. The goroutine must check `ctx.Done()` and return by itself.
+
+Internally, calling `cancel()` does several things:
+
+```text
+mark the context as canceled
+set ctx.Err() to context.Canceled
+close the ctx.Done() channel
+cancel child contexts derived from this context
+```
+
+The relationship can be represented with Mermaid:
+
+```mermaid
+flowchart TD
+    A["context.Background()"] --> B["context.WithCancel(parent)"]
+
+    B --> C["ctx"]
+    B --> D["cancel()"]
+
+    C --> E["ctx.Done() channel"]
+    C --> F["ctx.Err()"]
+
+    G["goroutine / worker"] --> H{"select"}
+    H --> I["case <-ctx.Done()"]
+    H --> J["default: keep working"]
+
+    D --> K["call cancel()"]
+    K --> L["mark ctx canceled"]
+    L --> M["set ctx.Err() = context.Canceled"]
+    L --> N["close ctx.Done() channel"]
+
+    N --> I
+    I --> O["return"]
+    O --> P["goroutine exits"]
+
+    J --> G
+```
+
+If a parent context is canceled, its child contexts are canceled too:
+
+```mermaid
+flowchart TD
+    A["parent ctx"] --> B["child ctx 1"]
+    A --> C["child ctx 2"]
+    B --> D["grandchild ctx"]
+
+    E["cancel parent"] --> A
+    A --> F["close parent.Done()"]
+    F --> G["cancel child ctx 1"]
+    F --> H["cancel child ctx 2"]
+
+    G --> B
+    B --> I["close child1.Done()"]
+    I --> J["cancel grandchild ctx"]
+    J --> D
+    D --> K["close grandchild.Done()"]
+
+    H --> C
+    C --> L["close child2.Done()"]
+```
 
 Of course, you can also declare multiple contexts and **`cancel`** functions, waiting for goroutines to complete their jobs with **`cancel`** and **`Done`**:
 ```go
