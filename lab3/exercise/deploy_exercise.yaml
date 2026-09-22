@@ -13,6 +13,13 @@ services:
     networks:
       n6net:
         ipv4_address: 10.100.6.100
+      n3net:
+        ipv4_address: 10.100.3.100
+        aliases:
+          - upf.n3.org
+      n4net:
+        aliases:
+          - upf.n4.org
 
   free5gc-n6gw:
     container_name: n6gw
@@ -21,7 +28,7 @@ services:
       args:
         DEBUG_TOOLS: "false"
     command: bash -c "./n6gw-iptables.sh && sleep infinity"
-    volumes: 
+    volumes:
       - ./config/n6gw_iptables.sh:/root/n6gw-iptables.sh
     cap_add:
       - NET_ADMIN
@@ -76,6 +83,9 @@ services:
       privnet:
         aliases:
           - amf.free5gc.org
+      n2net:
+        aliases:
+          - amf.n2.org
     depends_on:
       - free5gc-nrf
 
@@ -149,6 +159,9 @@ services:
       privnet:
         aliases:
           - smf.free5gc.org
+      n4net:
+        aliases:
+          - smf.n4.org
     depends_on:
       - free5gc-nrf
       - free5gc-upf
@@ -247,7 +260,12 @@ services:
     devices:
       - "/dev/net/tun"
     networks:
-      
+      n2net:
+        aliases:
+          - gnb.n2.org
+      n3net:
+        aliases:
+          - gnb.n3.org
     depends_on:
       - free5gc-amf
       - free5gc-upf
