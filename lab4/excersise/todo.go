@@ -54,7 +54,6 @@ func (app *TodoApp) CreateTask(name string) TodoTask {
 	app.nextId++
 
 	app.Tasks = append(app.Tasks, newTask)
-	app.nextId++
 
 	return newTask
 }
@@ -106,8 +105,8 @@ func TodoTaskGetOne(c *gin.Context) {
 }
 
 func TodoTaskGetAll(c *gin.Context) {
-	// TODO: Implement the get all tasks endpoint
-	c.Status(http.StatusNotImplemented)
+	tasks := globalApp.GetTaskAll()
+	c.JSON(http.StatusOK, tasks)
 }
 
 func TodoTaskCreate(c *gin.Context) {
@@ -127,13 +126,44 @@ func TodoTaskCreate(c *gin.Context) {
 }
 
 func TodoTaskUpdate(c *gin.Context) {
-	// TODO: Implement the update task endpoint
-	c.Status(http.StatusNotImplemented)
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID must be an integer"})
+		return
+	}
+
+	var body struct {
+		Name      string `json:"name" binding:"required"`
+		Completed *bool  `json:"completed" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	task := globalApp.UpdateTask(id, body.Name, *body.Completed)
+	if task == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
 }
 
 func TodoTaskDelete(c *gin.Context) {
-	// TODO: Implement the delete task endpoint
-	c.Status(http.StatusNotImplemented)
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID must be an integer"})
+		return
+	}
+
+	if err := globalApp.DeleteTask(id); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func CorsMiddleware() gin.HandlerFunc {
@@ -152,7 +182,9 @@ func main() {
 	engine.POST("/tasks", TodoTaskCreate)
 	engine.GET("/tasks/:id", TodoTaskGetOne)
 
-	// TODO: Add the missing endpoints for the update and delete operations
+	engine.GET("/tasks", TodoTaskGetAll)
+	engine.DELETE("/tasks/:id", TodoTaskDelete)
+	engine.PUT("/tasks/:id", TodoTaskUpdate)
 
 	engine.Run("0.0.0.0:8080")
 }

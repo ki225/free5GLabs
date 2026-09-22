@@ -186,7 +186,7 @@ components:
         name:
           type: string
       required:
-        - title
+        - name
 
     UpdateTaskRequest:
       type: object
@@ -196,7 +196,7 @@ components:
         completed:
           type: boolean
       required:
-        - title
+        - name
         - completed
 
     ErrorMessage:
